@@ -1,0 +1,32 @@
+﻿# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# DuckDB
+warehouse.duckdb
+warehouse.duckdb.wal
+
+# dbt
+transforms/target/
+transforms/dbt_packages/
+transforms/logs/
+
+# Airflow
+airflow/logs/
+
+# Docker override
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
