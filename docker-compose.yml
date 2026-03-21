@@ -1,0 +1,244 @@
+version: "3.8"
+
+# ──────────────────────────────────────────────────────────────
+# UPDATED ARCHITECTURE — v4 Final
+# Removed: Kafka, Kafka-UI, MinIO, minio-init, Postgres
+# Kept:    MongoDB (local dev) + Airflow + Prometheus + Grafana
+#
+# Total RAM: ~700MB (was 2.2GB before)
+# Fits in your 1.8GB free RAM on Dell E7470
+#
+# What replaced removed services:
+#   Kafka     → Direct MongoDB Atlas write (no broker needed)
+#   MinIO     → Cloudflare R2 (free 10GB, S3-compatible)
+#   Postgres  → Supabase (free hosted Postgres for Airflow)
+# ──────────────────────────────────────────────────────────────
+
+networks:
+  de-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  airflow-logs:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ────────────────────────────────────────────────────────────
+  # MONGODB — local dev and testing only
+  # Production data goes to MongoDB Atlas (in your .env)
+  # Use this to test locally before pushing to Atlas
+  # Port: 27017
+  # ────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    networks: [de-network]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME}
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+        reservations:
+          memory: 128m
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────
+  # AIRFLOW INIT — runs once, creates DB schema + admin user
+  # Connects to Supabase Postgres via SUPABASE_DB_URL in .env
+  # Exits after setup — this is intentional
+  # ────────────────────────────────────────────────────────────
+  airflow-init:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: airflow-init
+    networks: [de-network]
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${SUPABASE_DB_URL}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+      _AIRFLOW_WWW_USER_FIRSTNAME: Admin
+      _AIRFLOW_WWW_USER_LASTNAME: User
+      _AIRFLOW_WWW_USER_EMAIL: admin@example.com
+      _AIRFLOW_WWW_USER_ROLE: Admin
+    user: "50000:0"
+    command: version
+    restart: "no"
+
+  # ────────────────────────────────────────────────────────────
+  # AIRFLOW WEBSERVER — browser UI at localhost:8080
+  # Login: admin / admin
+  # RAM: ~300MB
+  # ────────────────────────────────────────────────────────────
+  airflow-webserver:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: airflow-webserver
+    networks: [de-network]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./ingestion:/opt/airflow/ingestion
+      - ./processing:/opt/airflow/processing
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${SUPABASE_DB_URL}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      # Cloud service credentials passed to DAGs
+      MONGO_ATLAS_URI: ${MONGO_ATLAS_URI}
+      MONGO_DB_NAME: ${MONGO_DB_NAME}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_BRONZE: bronze
+      R2_BUCKET_SILVER: silver
+      R2_BUCKET_GOLD: gold
+      SLACK_WEBHOOK: ${SLACK_WEBHOOK}
+      DUCKDB_PATH: ${DUCKDB_PATH}
+      OPEN_METEO_BASE_URL: "https://api.open-meteo.com/v1/forecast"
+      WEATHER_CITIES: ${WEATHER_CITIES}
+    command: webserver
+    user: "50000:0"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 256m
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────
+  # AIRFLOW SCHEDULER — triggers DAGs on schedule
+  # No UI — runs silently in background
+  # RAM: ~128MB
+  # ────────────────────────────────────────────────────────────
+  airflow-scheduler:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: airflow-scheduler
+    networks: [de-network]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./ingestion:/opt/airflow/ingestion
+      - ./processing:/opt/airflow/processing
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${SUPABASE_DB_URL}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      MONGO_ATLAS_URI: ${MONGO_ATLAS_URI}
+      MONGO_DB_NAME: ${MONGO_DB_NAME}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_BRONZE: bronze
+      R2_BUCKET_SILVER: silver
+      R2_BUCKET_GOLD: gold
+      SLACK_WEBHOOK: ${SLACK_WEBHOOK}
+      DUCKDB_PATH: ${DUCKDB_PATH}
+      OPEN_METEO_BASE_URL: "https://api.open-meteo.com/v1/forecast"
+      WEATHER_CITIES: ${WEATHER_CITIES}
+    command: scheduler
+    user: "50000:0"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+        reservations:
+          memory: 128m
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────
+  # PROMETHEUS — scrapes metrics from your Python scripts
+  # Open: localhost:9090
+  # RAM: ~50MB
+  # Note: Add in Week 4 only — comment out for Weeks 1-3
+  # ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    networks: [de-network]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 64m
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────
+  # GRAFANA — dashboard to visualise pipeline metrics
+  # Open: localhost:3000
+  # Login: admin / admin
+  # RAM: ~100MB
+  # Note: Add in Week 4 only — comment out for Weeks 1-3
+  # ────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    networks: [de-network]
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+        reservations:
+          memory: 64m
+    restart: unless-stopped
