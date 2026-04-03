@@ -1,10 +1,12 @@
-from dagster import define_asset_job
-from dagster_pipeline.assets.producer_asset import run_producer
+from dagster import define_asset_job, AssetSelection
+from dagster_pipeline.assets.ingestion_cycle_asset import run_ingestion_cycle
 
 
 weather_job = define_asset_job(name = "weather_pipeline_job",
-                               selection=[run_producer]
-                               )
+                               selection=AssetSelection.assets(run_ingestion_cycle))
+
+
+
 
 
 

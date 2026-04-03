@@ -115,6 +115,7 @@ def parse_and_validate(fv,city):
 #         log.error(f"Error occurred while inserting data into MongoDB: {e}")
 
 def run_producer():
+    produced_count = 0
 
     for city in cities:
         result = fetch_city_weather(city)
@@ -129,11 +130,14 @@ def run_producer():
                 )
                 producer.poll(0)
                 log.info(f"Weather event for {city['name']} queued for Kafka delivery")
+                produced_count += 1
     pending_messages = producer.flush()
     if pending_messages:
         log.warning(f"{pending_messages} Kafka message(s) were not delivered before shutdown")
     else:
         log.info("All queued Kafka messages were delivered successfully")
+    log.info(f"Kafka producer queued {produced_count} weather event(s) in total")
+    return produced_count
                 # insert_to_mongo(resulted_data) 
 
 if __name__ == "__main__":
