@@ -9,6 +9,11 @@ __pycache__/
 venv/
 *.egg-info/
 
+#logs
+logs/
+*.log
+.tmp_dagster_home_*/
+
 # DuckDB
 warehouse.duckdb
 warehouse.duckdb.wal
@@ -18,11 +23,11 @@ transforms/target/
 transforms/dbt_packages/
 transforms/logs/
 
-# Airflow
-airflow/logs/
+# # Airflow
+# airflow/logs/
 
-# Docker override
-docker-compose.override.yml
+# # Docker override
+# docker-compose.override.yml
 
 # OS
 .DS_Store
