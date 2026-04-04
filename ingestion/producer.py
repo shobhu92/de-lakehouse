@@ -26,10 +26,12 @@ load_dotenv()
 
 cities = json.loads(os.getenv("WEATHER_CITIES"))
 producer = Producer({"bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS")})
+delivery_failures = []
 
 
 def delivery_report(err, msg):
     if err is not None:
+        delivery_failures.append(str(err))
         log.error(f"Kafka delivery failed for topic {msg.topic()}: {err}")
     else:
         log.info(
@@ -74,6 +76,7 @@ def parse_and_validate(fetched_weather, city):
 
 def run_producer():
     produced_count = 0
+    delivery_failures.clear()
 
     for city in cities:
         result = fetch_city_weather(city)
@@ -91,7 +94,15 @@ def run_producer():
     pending_messages = producer.flush()
     if pending_messages:
         log.warning(f"{pending_messages} Kafka message(s) were not delivered before shutdown")
-    else:
+
+    if delivery_failures:
+        raise RuntimeError(
+            "Kafka delivery failed for one or more messages. "
+            f"bootstrap_servers={os.getenv('KAFKA_BOOTSTRAP_SERVERS')}, "
+            f"failures={delivery_failures}"
+        )
+
+    if pending_messages == 0:
         log.info("All queued Kafka messages were delivered successfully")
     log.info(f"Kafka producer queued {produced_count} weather event(s) in total")
     return produced_count
