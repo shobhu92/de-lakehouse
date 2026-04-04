@@ -1,4 +1,4 @@
-﻿# Secrets — never commit
+# Secrets
 .env
 
 # Python
@@ -9,29 +9,12 @@ __pycache__/
 venv/
 *.egg-info/
 
-#logs
+# Runtime files
 logs/
 *.log
 .tmp_dagster_home_*/
 
-# DuckDB
-warehouse.duckdb
-warehouse.duckdb.wal
-
-# dbt
-transforms/target/
-transforms/dbt_packages/
-transforms/logs/
-
-# # Airflow
-# airflow/logs/
-
-# # Docker override
-# docker-compose.override.yml
-
-# OS
+# OS / IDE
 .DS_Store
 Thumbs.db
-
-# IDE
 .idea/
